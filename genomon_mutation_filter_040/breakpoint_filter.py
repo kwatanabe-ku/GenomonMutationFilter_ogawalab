@@ -1,19 +1,15 @@
-from __future__ import print_function
 import pysam
 import sys
 import os
 import re
 import logging
-import subprocess
-from . import utils
 
 #
 # Class definitions
 #
 class Breakpoint_filter:
 
-    def __init__(self, max_depth, min_clip_size, junc_num_thres, mapq_thres, header_flag, exclude_sam_flags, reference_genome):
-        self.reference_genome = reference_genome
+    def __init__(self, max_depth, min_clip_size, junc_num_thres, mapq_thres, header_flag, exclude_sam_flags):
         self.max_depth = max_depth
         self.min_clip_size = min_clip_size
         self.junc_num_thres = junc_num_thres
@@ -52,8 +48,21 @@ class Breakpoint_filter:
             # skip low mapping quality
             if read.mapq < self.mapq_thres: continue
 
-            left_clipping = (read.cigar[0][1] if read.cigar[0][0] in [4, 5] else 0)
-            right_clipping = (read.cigar[len(read.cigar) - 1][1] if read.cigar[len(read.cigar) - 1][0] in [4, 5] else 0)
+            #####Fix:v0.2.1 Only soft-clip is considered.
+            #In prism pipeline, hard-clip simply means trimmed adaptor.
+            if read.cigar[0][0] == 4:
+                left_clipping = read.cigar[0][1]
+            elif read.cigar[0][0] == 5 and read.cigar[1][0] == 4:
+                left_clipping = read.cigar[1][1]
+            else:
+                left_clipping = 0
+                
+            if read.cigar[-1][0] == 4:
+                right_clipping = read.cigar[-1][1]
+            elif read.cigar[-1][0] == 5 and read.cigar[-2][0] == 4:
+                right_clipping = read.cigar[-2][1]
+            else:
+                right_clipping = 0
 
             # get strand info
             strand = "-" if flags[4] == "1" else "+"
@@ -114,12 +123,7 @@ class Breakpoint_filter:
                 
     def filter(self, in_mutation_file, in_bam, output):
    
-        seq_filename, seq_ext = os.path.splitext(in_bam)
-
-        if seq_ext == ".cram": 
-            samfile = pysam.AlignmentFile(in_bam, "rc", reference_filename=self.reference_genome)
-        else:
-            samfile = pysam.AlignmentFile(in_bam, "rb")
+        samfile = pysam.AlignmentFile(in_bam, "rb")
 
         srcfile = open(in_mutation_file,'r')
         hResult = open(output,'w')
@@ -149,71 +153,3 @@ class Breakpoint_filter:
         ####
         hResult.close()
         srcfile.close()
-
-
-    def filter_vcf(self, in_mutation_file, in_bam, output, tumor_sample, normal_sample):
-  
-        import collections
-        import vcf
-        import copy
-
-        with open(in_mutation_file, 'r') as hin:
-            vcf_reader = vcf.Reader(hin)
-            f_keys = vcf_reader.formats.keys() #it's an ordered dict
-            len_f_keys = len(f_keys)
-     
-            vcf_reader.formats['NB'] = vcf.parser._Format('NB', 1, 'Integer', "The number of breakpoint-containing reads around ALT by the matched normal sample") 
-            vcf_reader.formats['LB'] = vcf.parser._Format('LB', 1, 'Integer', "The genome length from breakpoint-position to ALT position by matched normal sample") 
-            new_keys = vcf_reader.formats.keys()
-            sample_list = vcf_reader.samples
-    
-            # handle output vcf file
-            hout = open(output, 'w')
-            vcf_writer = vcf.Writer(hout, vcf_reader)
-    
-            seq_filename, seq_ext = os.path.splitext(in_bam)
-    
-            if seq_ext == ".cram": 
-                samfile = pysam.AlignmentFile(in_bam, "rc", reference_filename=self.reference_genome)
-            else:
-                samfile = pysam.AlignmentFile(in_bam, "rb")
-    
-            for record in vcf_reader:
-                # input file is annovar format (not zero-based number)
-                new_record = copy.deepcopy(record)
-                chr, start, end, ref, alt, is_conv = utils.vcf_fields2anno(record.CHROM, record.POS, record.REF, record.ALT[0])
-    
-                dist = "."
-                junction_num = "."
-                if samfile.count(chr, start, (start+1)) < self.max_depth:
-                    dist, junction_num = self.filter_main(chr, start, end, samfile)   
-    
-                if junction_num =="." or junction_num >= self.junc_num_thres:
-                    # Add FPRMAT
-                    new_record.FORMAT = new_record.FORMAT+":NB:LB"
-                    ## tumor sample
-                    sx = sample_list.index(tumor_sample)
-                    new_record.samples[sx].data = collections.namedtuple('CallData', new_keys)
-                    f_vals = [record.samples[sx].data[vx] for vx in range(len_f_keys)]
-                    handy_dict = dict(zip(f_keys, f_vals))
-                    handy_dict['NB'] = junction_num
-                    handy_dict['LB'] = dist
-                    new_vals = [handy_dict[x] for x in new_keys]
-                    new_record.samples[sx].data = new_record.samples[sx].data._make(new_vals)
-                    ## normal sample
-                    sx = sample_list.index(normal_sample)
-                    new_record.samples[sx].data = collections.namedtuple('CallData', new_keys)
-                    f_vals = [record.samples[sx].data[vx] for vx in range(len_f_keys)]
-                    handy_dict = dict(zip(f_keys, f_vals))
-                    handy_dict['NB'] = "."
-                    handy_dict['LB'] = "."
-                    new_vals = [handy_dict[x] for x in new_keys]
-                    new_record.samples[sx].data = new_record.samples[sx].data._make(new_vals)
-    
-                    vcf_writer.write_record(new_record)
-
-            ####
-            vcf_writer.close()
-            hout.close()
-            samfile.close()
-        

@@ -1,0 +1,111 @@
+#!/usr/local/bin/python3
+# -*- coding: utf-8 -*-
+
+import datetime, sys
+if 'realignment' in sys.argv:
+	print( 'start mutfilter:', datetime.datetime.now() )
+
+import os, sys, argparse
+sys.path = [os.path.dirname(__file__)] + sys.path
+
+
+####################
+# top level parser
+parser = argparse.ArgumentParser( description = 'genomon_mutation_filter' )
+parser.add_argument("--version", action = "version", version = "GenomonMutationFilter-0.4.0")
+if '--version' in sys.argv:
+	args = parser.parse_args()
+	
+from run_main import *
+
+subparsers = parser.add_subparsers()
+
+
+####################
+# realignment filter 
+parse_parser = subparsers.add_parser("realignment")
+parse_parser.add_argument( '-t', '--target_mutation_file', help = 'mutation text', type = str, default = None, required = True )
+parse_parser.add_argument( '-1', '--bam1', help = '1st bam file ( tumor )', type = str, default = None, required = True )
+parse_parser.add_argument( '-2', '--bam2', help = '2nd bam file ( control )', type = str, default = None)
+parse_parser.add_argument( '-o', '--output', help = 'Output text file', type = str, default = None, required = True)
+parse_parser.add_argument( '-r', '--ref_genome', help = 'Reference genome', type = str, default = None , required = True)
+parse_parser.add_argument( '-b', '--blat_path', type = str, default = None, required = True)
+parse_parser.add_argument( '-m', '--tumor_min_mismatch', metavar = "tumor_min_mismatch", default='0', type=int)
+parse_parser.add_argument( '-M', '--normal_max_mismatch', metavar = "normal_max_mismatch", default='100000', type=int)
+parse_parser.add_argument( '-s', '--score_difference', metavar = "score_difference", default='5', type=int)
+parse_parser.add_argument( '-w', '--window_size', metavar = "window_size", default='200', type=int)
+parse_parser.add_argument( '-d', '--max_depth', metavar = "max_depth", default='5000', type=int)
+parse_parser.add_argument( '-F', '--exclude_sam_flags', metavar = "exclude_sam_flags", default='3328', type=int)
+parse_parser.add_argument( '--header', action="store_true", default=False,  dest='header_flag')
+#####Fix:v0.3.1  new options:
+parse_parser.add_argument( '--mapping_quality', metavar = "mapping_quality", default='1', type=int)
+parse_parser.add_argument( '--base_quality', metavar = "base_quality", default='0', type=int)
+parse_parser.add_argument( '--mutation_cluster', metavar = "mutation_cluster", default='1000', type=int)
+#####Fix:v0.3.0 20221114: UMIがある場合に指定するとPCRerrorによってinsert長が変わったために除去されなかったpotential duplicateを除去する
+parse_parser.add_argument( '--removedup_byumi', action="store_true",  default=False,  dest='removedup_byumi')
+parse_parser.add_argument( '--removedup_duplex', action="store_true",  default=False,  dest='removedup_duplex')
+#####Fix:v0.3.0 20221114: removedup_byumim, removedup_duplexを指定した場合、何bpまでのずれを重複とみなすか
+parse_parser.add_argument( '--removedup_thres', metavar = "removedup_thres", default='4', type=int)
+#####Fix:v0.4.0 20230509: cruciform filter用
+#周辺の回文構造を探す幅
+parse_parser.add_argument( '--cruciform_filter', action="store_true", default=False, dest='cruciform_filter')
+parse_parser.add_argument( '--cruciform_search_window', metavar = "cruciform_search_window", default='100', type=int)
+parse_parser.add_argument( '--cruciform_min_matchrate', metavar = "cruciform_min_matchrate", default='0.9', type=float)
+#for indel check
+parse_parser.add_argument( '--search_length_indel', metavar = "search_length_indel", default='40', type=int)
+parse_parser.add_argument( '--debug', action="store_true",  default=False,  dest='debug')
+
+#since v0.3.2, samtools and these options are not used.
+parse_parser.add_argument( '--samtools_path', type = str, default = None)
+parse_parser.add_argument( '--samtools_params', type = str, default = "-q 20 -BQ0 -d 10000000")
+parse_parser.set_defaults(func = run_realignment_filter)
+
+
+####################
+# indel filter parse
+parse_parser = subparsers.add_parser("indel")
+parse_parser.add_argument( '-t', '--target_mutation_file', help = 'mutation text', type = str, default = None, required = True )
+parse_parser.add_argument( '-2', '--bam2', help = 'normal bam file', type = str, default = None, required = True)
+parse_parser.add_argument( '-o', '--output', help = 'Output text file', type = str, default = None, required = True)
+parse_parser.add_argument( '-l', '--search_length', metavar = "search_length", default='40', type=int)
+parse_parser.add_argument( '-n', '--neighbor', metavar = "neighbor", default='5', type=int)
+parse_parser.add_argument( '-d', '--min_depth', metavar = "min_depth", default='8', type=int)
+parse_parser.add_argument( '-m', '--min_mismatch', metavar = "min_mismatch", default='100000', type=int)
+parse_parser.add_argument( '-a', '--af_thres', metavar = "allele_frequency_thres", default='1', type=float)
+parse_parser.add_argument( '--header', action="store_true", default=False,  dest='header_flag')
+parse_parser.add_argument( '-s', '--samtools_path', type = str, default = None, required = True)
+parse_parser.add_argument( '-S', '--samtools_params', type = str, default = "-q 20 -BQ0 -d 10000000")
+parse_parser.set_defaults(func = run_indel_filter)
+
+
+####################
+# breakpoint filter parse
+parse_parser = subparsers.add_parser("breakpoint")
+parse_parser.add_argument( '-t', '--target_mutation_file', help = 'mutation text', type = str, default = None, required = True )
+parse_parser.add_argument( '-2', '--bam2', help = 'normal bam file', type = str, default = None, required = True)
+parse_parser.add_argument( '-o', '--output', help = 'Output text file', type = str, default = None, required = True)
+parse_parser.add_argument( '-d', '--max_depth', metavar = "max_depth", default='1000', type=int)
+parse_parser.add_argument( '-c', '--min_clip_size', metavar = "min_clip_size", default='20', type=int)
+parse_parser.add_argument( '-j', '--junc_num_thres', metavar = "junc_num_thres", default='0', type=int)
+parse_parser.add_argument( '-m', '--mapq_thres', metavar = "mapping_quality_thres", default='10', type=int)
+parse_parser.add_argument( '-F', '--exclude_sam_flags', metavar = "exclude_sam_flags", default='3332', type=int)
+parse_parser.add_argument( '--header', action="store_true", default=False,  dest='header_flag')
+parse_parser.set_defaults(func = run_breakpoint_filter)
+
+
+####################
+# simple repeat filter parse
+parse_parser = subparsers.add_parser("simplerepeat")
+parse_parser.add_argument( '-t', '--target_mutation_file', help = 'mutation text', type = str, default = None, required = True )
+parse_parser.add_argument( '-o', '--output', help = 'Output text file', type = str, default = None, required = True)
+parse_parser.add_argument( '-S', '--simple_repeat_db', help = 'simple_repeat_database', type = str, default = None, required = True)
+parse_parser.add_argument('--header', action="store_true", default=False,  dest='header_flag')
+parse_parser.set_defaults(func = run_simple_repeat_filter)
+
+
+####################
+args = parser.parse_args()
+args.func(args)
+
+if 'realignment' in sys.argv:
+	print( 'end mutfilter:', datetime.datetime.now() )

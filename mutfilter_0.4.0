@@ -1,0 +1,8 @@
+#!/bin/sh
+
+export PYTHONHOME=""
+export PYTHONPATH=""
+export PATH=/usr/local/bin:${PATH}
+
+`dirname "${BASH_SOURCE[0]}"`/genomon_mutation_filter_040/run "$@"
+

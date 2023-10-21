@@ -1,4 +1,3 @@
-from __future__ import print_function
 import sys
 import os
 import re
@@ -6,10 +5,7 @@ import pysam
 import argparse
 import logging
 import subprocess
-from . import auto_vivification as autov
-from . import utils
-import multiprocessing
-import vcf
+import auto_vivification as autov
 
 #
 # Class definitions
@@ -17,8 +13,7 @@ import vcf
 class Indel_filter:
 
     ############################################################
-    def __init__(self, search_length, min_depth, min_mismatch, af_thres, neighbor, header_flag, samtools_path, samtools_params, reference_genome, thread_num):
-        self.reference_genome = reference_genome
+    def __init__(self, search_length, min_depth, min_mismatch, af_thres, neighbor, header_flag, samtools_path, samtools_params):
         self.search_length = search_length
         self.min_depth = min_depth
         self.min_mismatch = min_mismatch
@@ -29,7 +24,6 @@ class Indel_filter:
         self.header_flag = header_flag
         self.samtools_path = samtools_path
         self.samtools_params = samtools_params
-        self.thread_num = thread_num
    
  
     ############################################################
@@ -42,14 +36,12 @@ class Indel_filter:
         cmd_list = [self.samtools_path,'mpileup']
         cmd_list.extend(self.samtools_params.split(" "))
         cmd_list.extend(['-r', region, in_bam])
-
-        seq_filename, seq_ext = os.path.splitext(in_bam)
-        if seq_ext == ".cram":
-            cmd_list.extend(['-f', self.reference_genome])
+        
+        FNULL = open(os.devnull, 'w')
 
         ####
         # print region
-        pileup = subprocess.Popen(cmd_list, stdout=subprocess.PIPE)
+        pileup = subprocess.Popen(cmd_list, stdout=subprocess.PIPE, stderr = FNULL)
         end_of_pipe = pileup.stdout
         for mpileup in end_of_pipe:
             # print mpileup.rstrip()
@@ -159,6 +151,7 @@ class Indel_filter:
                                 
         pileup.stdout.close()
         pileup.wait()
+        FNULL.close()
         return (max_mismatch_count, max_mismatch_rate)
 
 
@@ -194,69 +187,6 @@ class Indel_filter:
 
 
     ############################################################
-    def add_meta_vcf(self, vcf_reader):
-        # add vcf header info
-        vcf_reader.formats['NI'] = vcf.parser._Format('NI', 1, 'Integer', "The number of indel-containing reads around ALT by the matched normal sample")
-        vcf_reader.formats['RI'] = vcf.parser._Format('RI', 1, 'Float', "The ratio of indel-containing reads around ALT by matched normal sample") 
-        
-
-    ############################################################
-    def filter_main_vcf(self, in_mutation_file, in_bam, output, tumor_sample, normal_sample):
-
-        import collections
-        import vcf
-        import copy
-
-        with open(in_mutation_file, 'r') as hin:
-            vcf_reader = vcf.Reader(hin)
-            f_keys = vcf_reader.formats.keys() #it's an ordered dict
-            len_f_keys = len(f_keys)
-            self.add_meta_vcf(vcf_reader)
-            new_keys = vcf_reader.formats.keys()
-            sample_list = vcf_reader.samples
-    
-            # handle output vcf file
-            hout = open(output, 'w')
-            vcf_writer = vcf.Writer(hout, vcf_reader)
-    
-            for record in vcf_reader:
-                # input file is annovar format (not zero-based number)
-                new_record = copy.deepcopy(record)
-                chr, start, end, ref, alt, is_conv = utils.vcf_fields2anno(record.CHROM, record.POS, record.REF, record.ALT[0])
-         
-                max_mismatch_count, max_mismatch_rate = self.filter_main(chr, start, end, ref, alt, in_bam)            
-                
-                if(max_mismatch_count <= self.min_mismatch or max_mismatch_rate <= self.af_thres):
-    
-                    # Add FPRMAT
-                    new_record.FORMAT = new_record.FORMAT+":NI:RI"
-                    ## tumor sample
-                    sx = sample_list.index(tumor_sample)
-                    new_record.samples[sx].data = collections.namedtuple('CallData', new_keys)
-                    f_vals = [record.samples[sx].data[vx] for vx in range(len_f_keys)]
-                    handy_dict = dict(zip(f_keys, f_vals))
-                    handy_dict['NI'] = int(max_mismatch_count)
-                    handy_dict['RI'] = float('{0:.3f}'.format(float(max_mismatch_rate)))
-                    new_vals = [handy_dict[x] for x in new_keys]
-                    new_record.samples[sx].data = new_record.samples[sx].data._make(new_vals)
-                    ## normal sample
-                    sx = sample_list.index(normal_sample)
-                    new_record.samples[sx].data = collections.namedtuple('CallData', new_keys)
-                    f_vals = [record.samples[sx].data[vx] for vx in range(len_f_keys)]
-                    handy_dict = dict(zip(f_keys, f_vals))
-                    handy_dict['NI'] = "."
-                    handy_dict['RI'] = "."
-                    new_vals = [handy_dict[x] for x in new_keys]
-                    new_record.samples[sx].data = new_record.samples[sx].data._make(new_vals)
-    
-                    vcf_writer.write_record(new_record)
-    
-            ####
-            vcf_writer.close()
-            hout.close()
-
-
-    ############################################################
     def Print_header(self, in_mutation_file, hResult):
         with open(in_mutation_file,'r') as srcfile:
             header = srcfile.readline().rstrip('\n')  
@@ -266,88 +196,14 @@ class Indel_filter:
 
     ############################################################
     def filter(self, in_mutation_file, in_bam, output):
-        
-        thread_num_mod = 1
-        #
-        # multi thread
-        #             
-        if self.thread_num > 1:
-            thread_num_mod = utils.partition_anno(in_mutation_file, self.thread_num)
-            jobs = []
-            for idx in range(1, thread_num_mod+1): 
-                proc = multiprocessing.Process(target = self.filter_main_anno, \
-                    args = (in_mutation_file +"."+ str(idx), in_bam, output +"."+ str(idx), idx, True))
-                jobs.append(proc)
-                proc.start()
-
-            for idx in range(0, thread_num_mod): 
-                jobs[idx].join() 
-                if jobs[idx].exitcode != 0:
-                    raise RuntimeError('There was an error!')
-
-            with open(output, 'w') as w:
-                if self.header_flag:
-                    self.Print_header(in_mutation_file, w)
-                for idx in range(1, thread_num_mod+1): 
-                    with open(output +"."+ str(idx), 'r') as hin:
-                        for line in hin:
-                            print(line.rstrip('\n'), file=w) 
-
-        #
-        # single thread
-        # 
-        else:
-            with open(output, 'w') as w:
-                if self.header_flag:
-                    self.Print_header(in_mutation_file, w)
-            self.filter_main_anno(in_mutation_file, in_bam, output, 1, False)
+    
+        with open(output, 'w') as w:
+            if self.header_flag:
+                self.Print_header(in_mutation_file, w)
+        self.filter_main_anno(in_mutation_file, in_bam, output, 1, False)
         
         
-        for idx in range(1, thread_num_mod+1): 
+        for idx in range(1, 2): 
             if os.path.exists(in_mutation_file +"."+str(idx)): os.unlink(in_mutation_file +"."+str(idx))
             if os.path.exists(output +"."+str(idx)): os.unlink(output +"."+str(idx))
         
-        
-    ############################################################
-    def filter_vcf(self, in_mutation_file, in_bam, output, tumor_sample, normal_sample):
-
-        thread_num_mod = 1
-        #
-        # multi thread
-        #             
-        if self.thread_num > 1:
-            thread_num_mod = utils.partition_vcf(in_mutation_file, self.thread_num)
-            jobs = []
-            for idx in range(1, thread_num_mod+1): 
-                proc = multiprocessing.Process(target = self.filter_main_vcf, \
-                    args = (in_mutation_file +"."+ str(idx), in_bam, output +"."+ str(idx), tumor_sample, normal_sample))
-                jobs.append(proc)
-                proc.start()
-
-            for idx in range(0, thread_num_mod): 
-                jobs[idx].join() 
-                if jobs[idx].exitcode != 0:
-                    raise RuntimeError('There was an error!')
-
-            with open(in_mutation_file, 'r') as hin:
-                vcf_reader = vcf.Reader(hin)
-                self.add_meta_vcf(vcf_reader)
-                with open(output, 'w') as hout:
-                    vcf_writer = vcf.Writer(hout, vcf_reader)
-                    for idx in range(1, thread_num_mod+1): 
-                        with open(output +"."+ str(idx), 'r') as hin_tmp:
-                            vcf_reader_tmp = vcf.Reader(hin_tmp)
-                            for record in vcf_reader_tmp:
-                                vcf_writer.write_record(record)
-                vcf_writer.close()
-
-        #
-        # single thread
-        # 
-        else:
-            self.filter_main_vcf(in_mutation_file, in_bam, output, tumor_sample, normal_sample)
-    
-    
-        for idx in range(1, thread_num_mod+1): 
-            if os.path.exists(in_mutation_file +"."+str(idx)): os.unlink(in_mutation_file +"."+str(idx))
-            if os.path.exists(output +"."+str(idx)): os.unlink(output +"."+str(idx))

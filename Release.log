@@ -1,0 +1,77 @@
+genomon_mutation_filter
+
+
+
+v0.4.0 2023/05/10
+修正点
+　python3で動かすようにした（ライブラリの関係上の問題）
+
+###realignment###
+
+新機能
+*--cruciform_filterオプションの追加
+　回文構造によるcruciform DNAが切断酵素により適切に切断されなかったことによって生じるアーチファクトを除去するために使用
+　簡単には、変異場所からリード末端までの配列に対して逆向き相補的な配列を周囲の塩基配列から検索し、
+　マッチングするリード数をread_invに出力、マッチングしないリード数をread_notinvに出力する
+　周囲の配列をどれくらい広く検索するかは--cruciform_search_windowオプション、どの程度不一致を許容するかは--cruciform_min_matchrateで指定
+　なお、--cruciform_filterを指定しない場合、"---"が出力される
+
+*--removedup_duplexオプションの追加
+　duplex sequence(prismでconsensusを作成した場合)の場合は、removedup_byumiの代わりにこちらを使用したほうが良いと思われる
+　なお、両方指定した場合はremovedup_byumiが無視される
+
+
+v0.3.2 2023/01/04
+
+###realignment###
+
+新機能
+*--debugオプションの追加
+ 指定すると中間ファイルを削除せず、またtumor, normalのref, altリードのqnameを標準出力に出力する
+
+修正点
+*SNVについて周辺のindelを探す所をsamtoolsからpysamに変更したことにより高速化
+ --samtoolsや--samtools_paramなどのオプションも不要になった（指定していてもいいが使用されない）
+ わずかに出力結果は変わるが最終的な結果に影響を与えるほどのものではない
+　（indelを探す際のmapping qualityのしきい値を元々のrealignment filterと同じにしたため少し候補indelが変化する）
+　（複数のindelで同じようにvariant readが少なくなる場合、indel_infoに選ばれるものが少し変わる）
+
+v0.3.1 2022/11/23
+
+###realignment###
+
+新機能
+*-q, または--mapping_qualityオプションの追加(default: 1)
+ ただし、normalサンプルをカウントする場合は無視する
+*-Q, または--base_qualityオプションの追加(default: 0)
+ SNVの場合は、qualityが指定した数値以下のbaseはNに置換されてからrealignmentされます
+ indelの場合は予期せぬ結果を招くため置換しません
+*-v, または--mutation_clusterオプションの追加 (default: 1000)
+ 問題としている変異の前後2塩基ずつ以外でのvariant baseの数が指定した数値以上のリードを除外してカウントした数を出力する
+ ことにより、潜在的にqualityが悪いと考えられるリードを除外している
+*--removedup_byumiオプションの追加
+ 指定するとUMIをもとにduplicateの可能性が高いリードを除去して計算する（技術情報参照）
+ low-inputでduplicate rateが高いサンプルでアーチファクトを減らす効果があります
+ このオプションを指定した場合、--removedup_thres(default: 4)によって指定した数までのinsert長のゆらぎをduplicateとし判断します
+*strandratio(realignment)行を出力するように修正
+*indelが繰り返し配列で起きている場合、何回のリピートがある配列かをカウントして出力
+*SNVにおいて、近くにindelが存在し、そのindelで当SNVが説明できる場合、そのindelの場所とindelで説明できないSNVの数を出力
+
+修正点
+*変異箇所がread1とread2でoverlapしており、read1とread2で食い違う場合の変異リードのカウントの方法を修正
+ これまではread1がref、read2がaltに当てはまる場合、ref,alt両方+1となっていた->otherにカウントするように変更
+ なお、read1がalt、read2がother(refともaltとも言い切れない)場合にはaltにカウントする
+*readを抽出する際に、問題となっている変異箇所の前後2塩基まで含めて抽出する(技術情報2参照)
+
+###breakpoint###
+修正
+*hardclipは無視して、soft-clipのみカウント
+ (prism pipelineではhardclipはtrimされたadaptorを示すため)
+
+    
+    
+#技術情報
+samtools v1.10以降は --output-QNAME オプションがあるため、これを用いてoverlapの処理をしている。
+-x オプションも用いて、すべてのbase/qname/base qualityを出してから計算している
+v0.2.0では-xを用いていないため、-鎖側のoverlap readは無条件でbase quality=0になっていた
+なお、--reverse-delも用いて、deletionでskipしているリードが+鎖か-鎖かも検出している

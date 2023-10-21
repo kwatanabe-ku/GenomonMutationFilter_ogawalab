@@ -1,10 +1,8 @@
-from __future__ import print_function
 import sys
 import os
 import re
 import logging
 import pysam
-from . import utils
 
 #
 # Class definitions
@@ -78,30 +76,3 @@ class Simple_repeat_filter:
         ####
         hResult.close()
         srcfile.close()
-
-
-    def filter_vcf(self, in_mutation_file, output):
-
-        import vcf
-
-        tb = pysam.TabixFile(self.simple_repeat_db)
-
-        with open(in_mutation_file, 'r') as hin:
-            vcf_reader = vcf.Reader(hin)
-            vcf_reader.infos['SR'] = vcf.parser._Info('SR', 0, 'Flag', "Simple repeat region","MutationFilter","v0.2.0")
-    
-            # handle output vcf file
-            vcf_writer = vcf.Writer(open(output, 'w'), vcf_reader)
-    
-            for record in vcf_reader:
-    
-                chr, start, end, ref, alt, is_conv = utils.vcf_fields2anno(record.CHROM, record.POS, record.REF, record.ALT[0])
-                db_pos, dbseq = self.filter_main(chr,start,end,tb)
-                
-                if not db_pos == "":
-                    # Add INFO
-                    record.INFO['SR'] = True
-                vcf_writer.write_record(record)
-
-            vcf_writer.close()
-
